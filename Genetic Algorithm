@@ -1,0 +1,92 @@
+import random
+
+# ------------------------
+# Parameters
+# ------------------------
+POP_SIZE = 10         # Number of drivers in the population
+GENS = 10             # Number of generations
+MUT_RATE = 0.1        # Probability of mutation
+CROSS_RATE = 0.7      # Probability of crossover
+TRACK_LENGTH = 1000   # Track length for fitness function
+
+# ------------------------
+# Fitness Function
+# ------------------------
+def fitness(driver_setup):
+    """
+    Driver setup: [speed, steering]
+    speed ∈ [0,100], steering ∈ [0,1]
+    """
+    speed, steering = driver_setup
+
+    # Distance depends on speed and how close steering is to straight (0.5)
+    distance = speed * (1 - abs(steering - 0.5)) * 20
+
+    # Time taken to complete the track
+    time = TRACK_LENGTH / (speed + 1)
+
+    # Penalty for poor steering at high speed
+    penalty = (abs(steering - 0.5) * speed) / 50
+
+    # Higher fitness means better driver
+    return (distance / TRACK_LENGTH) + (1 / (time + 1)) - penalty
+
+# ------------------------
+# GA Operators
+# ------------------------
+def create_driver_setup():
+    """Random driver setup [speed, steering]."""
+    return [random.uniform(0,100), random.random()]
+
+def crossover(d1, d2):
+    """Single-point crossover between two driver setups."""
+    if random.random() < CROSS_RATE:
+        point = random.randint(1, len(d1)-1)
+        return d1[:point] + d2[point:], d2[:point] + d1[point:]
+    return d1[:], d2[:]
+
+def mutate(driver_setup):
+    """Mutate speed and/or steering."""
+    if random.random() < MUT_RATE:
+        driver_setup[0] = random.uniform(0,100)  # mutate speed
+    if random.random() < MUT_RATE:
+        driver_setup[1] = random.random()        # mutate steering
+    return driver_setup
+
+# ------------------------
+# Main GA Loop
+# ------------------------
+population = [create_driver_setup() for _ in range(POP_SIZE)]
+
+for gen in range(GENS):
+    # Evaluate fitness for each driver
+    scores = [fitness(d) for d in population]
+    best_idx = scores.index(max(scores))
+    best_driver = population[best_idx]
+
+    # Print best driver of this generation
+    print(f"Gen {gen+1}: Best Fitness={scores[best_idx]:.4f}, "
+          f"Driver Setup=[Speed={best_driver[0]:.4f}, Steering={best_driver[1]:.4f}]")
+
+    # Selection probabilities
+    total_fit = sum(scores)
+    probs = [s/total_fit if total_fit > 0 else 1/POP_SIZE for s in scores]
+
+    # Generate new population
+    new_pop = []
+    for _ in range(POP_SIZE // 2):
+        d1 = random.choices(population, probs)[0]
+        d2 = random.choices(population, probs)[0]
+        c1, c2 = crossover(d1, d2)
+        new_pop.extend([mutate(c1), mutate(c2)])
+    population = new_pop
+
+# ------------------------
+# Final Result
+# ------------------------
+final_scores = [fitness(d) for d in population]
+best_idx = final_scores.index(max(final_scores))
+best = population[best_idx]
+
+print("\n✅ Best Driver Found:")
+print(f"Speed={best[0]:.4f}, Steering={best[1]:.4f}, Fitness={final_scores[best_idx]:.4f}")

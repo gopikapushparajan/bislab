@@ -1,0 +1,71 @@
+import numpy as np
+import random
+
+# ----------- Knapsack Problem Setup -----------
+def knapsack_value(solution, weights, values, capacity):
+    total_weight = np.sum(solution * weights)
+    total_value = np.sum(solution * values)
+    if total_weight > capacity:
+        return -1  # penalty for infeasible solution
+    return total_value
+
+def random_solution(n):
+    return np.random.randint(0, 2, size=n)
+
+# ----------- Lévy Flight (discrete) -----------
+def levy_flight(solution, alpha=1):
+    new_solution = solution.copy()
+    n = len(solution)
+    flips = max(1, int(alpha * np.random.randint(1, n//2)))
+    flip_indices = np.random.choice(n, flips, replace=False)
+    new_solution[flip_indices] = 1 - new_solution[flip_indices]
+    return new_solution
+
+# ----------- Cuckoo Search for Knapsack -----------
+def cuckoo_search_knapsack(weights, values, capacity, n_nests=20, alpha=1, pa=0.25, max_iter=10):
+    n = len(weights)
+    nests = [random_solution(n) for _ in range(n_nests)]
+    fitness = [knapsack_value(sol, weights, values, capacity) for sol in nests]
+    
+    best_sol = nests[np.argmax(fitness)]
+    best_val = max(fitness)
+
+    for _ in range(max_iter):
+        # Generate new solution by levy flight
+        idx = random.randrange(n_nests)
+        new_sol = levy_flight(nests[idx], alpha)
+        new_val = knapsack_value(new_sol, weights, values, capacity)
+        
+        # Replace if better
+        if new_val > fitness[idx]:
+            nests[idx] = new_sol
+            fitness[idx] = new_val
+
+        # Abandon a fraction of worse nests
+        for j in range(n_nests):
+            if random.random() < pa:
+                nests[j] = random_solution(n)
+                fitness[j] = knapsack_value(nests[j], weights, values, capacity)
+
+        # Update best
+        max_idx = np.argmax(fitness)
+        if fitness[max_idx] > best_val:
+            best_val = fitness[max_idx]
+            best_sol = nests[max_idx]
+
+    return best_sol, best_val
+
+# ----------- Example Run -----------
+if __name__ == "__main__":
+    # Example: 10 items
+    weights = np.array([12, 2, 1, 1, 4, 1, 2, 10, 3, 6])
+    values  = np.array([4, 2, 2, 1, 10, 2, 1, 6, 3, 8])
+    capacity = 15
+
+    best_solution, best_value = cuckoo_search_knapsack(
+        weights, values, capacity, n_nests=25, alpha=1, pa=0.25, max_iter=10
+    )
+
+    print("Best solution (items picked):", best_solution)
+    print("Total value:", best_value)
+    print("Total weight:", np.sum(best_solution * weights))

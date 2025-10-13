@@ -1,0 +1,90 @@
+import numpy as np
+
+# --- 1. Problem setup ---
+# XOR dataset
+X = np.array([[0,0],[0,1],[1,0],[1,1]])
+y = np.array([[0],[1],[1],[0]])
+
+# --- 2. Neural network structure ---
+input_size = 2
+hidden_size = 4
+output_size = 1
+weight_dim = input_size * hidden_size + hidden_size * output_size
+
+def sigmoid(x):
+    return 1 / (1 + np.exp(-x))
+
+def forward_pass(weights, X):
+    w1 = weights[:input_size * hidden_size].reshape(input_size, hidden_size)
+    w2 = weights[input_size * hidden_size:].reshape(hidden_size, output_size)
+    hidden = sigmoid(X @ w1)
+    output = sigmoid(hidden @ w2)
+    return output
+
+def fitness(weights):
+    pred = forward_pass(weights, X)
+    loss = np.mean((y - pred) ** 2)
+    return -loss  # higher = better
+
+# --- 3. Initialize 3x3 grid population ---
+grid_shape = (3, 3, weight_dim)
+population = np.random.uniform(-1, 1, grid_shape)
+mutation_rate = 0.1
+generations = 100
+
+# Precompute neighbor offsets (Von Neumann)
+neighbor_offsets = np.array([
+    [-1, 0],
+    [1, 0],
+    [0, -1],
+    [0, 1]
+])
+
+# --- 4. PCA Evolution ---
+for _ in range(generations):
+    new_population = np.copy(population)
+    
+    # Evaluate all cells
+    fitness_grid = np.zeros((3, 3))
+    for i in range(3):
+        for j in range(3):
+            fitness_grid[i, j] = fitness(population[i, j])
+    
+    # Update each cell
+    for i in range(3):
+        for j in range(3):
+            current = population[i, j]
+            
+            # Get neighbors with wrap-around
+            neighbors_idx = (neighbor_offsets + [i, j]) % 3
+            neighbors = np.array([population[x, y] for x, y in neighbors_idx])
+            
+            # Pick best neighbor
+            neighbor_fitness = np.array([fitness(population[x, y]) for x, y in neighbors_idx])
+            best_neighbor = neighbors[np.argmax(neighbor_fitness)]
+            
+            # Crossover (blend)
+            alpha = np.random.rand()
+            offspring = alpha * current + (1 - alpha) * best_neighbor
+            
+            # Mutation
+            mutation_mask = np.random.rand(weight_dim) < mutation_rate
+            offspring += np.random.uniform(-0.5, 0.5, weight_dim) * mutation_mask
+            
+            # Replacement
+            if fitness(offspring) > fitness(current):
+                new_population[i, j] = offspring
+    
+    population = new_population
+
+# --- 5. Results ---
+final_fitness_grid = np.zeros((3, 3))
+for i in range(3):
+    for j in range(3):
+        final_fitness_grid[i, j] = fitness(population[i, j])
+
+best_cell = population.reshape(-1, weight_dim)[np.argmax(final_fitness_grid)]
+output = forward_pass(best_cell, X)
+
+print("Final Fitness Grid (higher = better):\n", final_fitness_grid.round(4))
+print("\nBest network output for XOR input:\n", output.round(3))

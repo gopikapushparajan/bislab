@@ -1,0 +1,207 @@
+from __future__ import annotations
+from dataclasses import dataclass
+from typing import List, Tuple, Optional
+import math
+import random
+import numpy as np
+
+City = Tuple[float, float]
+
+
+def euclidean_distance(a: City, b: City) -> float:
+    dx = a[0] - b[0]
+    dy = a[1] - b[1]
+    return math.hypot(dx, dy)
+
+
+def build_distance_matrix(coords: List[City]) -> np.ndarray:
+    n = len(coords)
+    d = np.zeros((n, n), dtype=float)
+    for i in range(n):
+        for j in range(i + 1, n):
+            dist = euclidean_distance(coords[i], coords[j])
+            d[i, j] = d[j, i] = dist
+    eps_mask = (d == 0) & (~np.eye(n, dtype=bool))
+    if eps_mask.any():
+        d[eps_mask] = 1e-12
+    return d
+
+
+def tour_length(tour: List[int], dmat: np.ndarray) -> float:
+    L = 0.0
+    for i in range(len(tour) - 1):
+        L += dmat[tour[i], tour[i + 1]]
+    L += dmat[tour[-1], tour[0]]
+    return L
+
+
+def nearest_neighbor_length(dmat: np.ndarray, start: int = 0) -> float:
+    n = dmat.shape[0]
+    unvisited = set(range(n))
+    current = start
+    unvisited.remove(current)
+    order = [current]
+    while unvisited:
+        nxt = min(unvisited, key=lambda j: dmat[current, j])
+        order.append(nxt)
+        unvisited.remove(nxt)
+        current = nxt
+    return tour_length(order, dmat)
+
+
+@dataclass
+class ACOConfig:
+    n_ants: int = 10
+    n_iterations: int = 100
+    alpha: float = 1.0
+    beta: float = 5.0
+    rho: float = 0.5
+    q: float = 1.0
+    elitist_weight: float = 2.0
+    restart_on_stagnation: bool = True
+    stagnation_patience: int = 30
+    seed: Optional[int] = 42
+
+
+class AntColony:
+    def __init__(self, distances: np.ndarray, cfg: ACOConfig):
+        self.d = distances
+        self.n = distances.shape[0]
+        self.cfg = cfg
+
+        if cfg.seed is not None:
+            random.seed(cfg.seed)
+            np.random.seed(cfg.seed)
+
+        with np.errstate(divide='ignore'):
+            self.eta = 1.0 / self.d
+        np.fill_diagonal(self.eta, 0.0)
+
+        L_nn = nearest_neighbor_length(self.d, start=0)
+        tau0 = self.cfg.n_ants / L_nn
+        self.tau = np.full((self.n, self.n), tau0, dtype=float)
+        np.fill_diagonal(self.tau, 0.0)
+
+        self.best_tour: List[int] = list(range(self.n))
+        self.best_length: float = float('inf')
+
+    def _choose_next(self, current: int, allowed: List[int]) -> int:
+        alpha, beta = self.cfg.alpha, self.cfg.beta
+        tau = self.tau[current, allowed]
+        eta = self.eta[current, allowed]
+        weights = np.power(tau, alpha) * np.power(eta, beta)
+        s = weights.sum()
+        if s <= 0 or not np.isfinite(s):
+            return random.choice(allowed)
+        probs = weights / s
+        r = random.random()
+        cum = 0.0
+        for idx, p in zip(allowed, probs):
+            cum += p
+            if r <= cum:
+                return idx
+        return allowed[-1]
+
+    def _construct_tour(self, start_city: int = 0) -> List[int]:
+        current = start_city
+        tour = [current]
+        allowed = set(range(self.n))
+        allowed.remove(current)
+        while allowed:
+            nxt = self._choose_next(current, list(allowed))
+            tour.append(nxt)
+            allowed.remove(nxt)
+            current = nxt
+        return tour
+
+    def _evaporate(self):
+        self.tau *= (1.0 - self.cfg.rho)
+        np.fill_diagonal(self.tau, 0.0)
+
+    def _deposit(self, tours: List[List[int]], lengths: List[float]):
+        for tour, L in zip(tours, lengths):
+            delta = self.cfg.q / L
+            for i in range(self.n):
+                a = tour[i]
+                b = tour[(i + 1) % self.n]
+                self.tau[a, b] += delta
+                self.tau[b, a] += delta
+
+        if self.best_length < float('inf') and self.cfg.elitist_weight > 0:
+            delta_best = self.cfg.elitist_weight * (self.cfg.q / self.best_length)
+            bt = self.best_tour
+            for i in range(self.n):
+                a = bt[i]
+                b = bt[(i + 1) % self.n]
+                self.tau[a, b] += delta_best
+                self.tau[b, a] += delta_best
+
+    def run(self) -> Tuple[List[int], float]:
+        no_improve = 0
+        for _ in range(self.cfg.n_iterations):
+            tours = []
+            lengths = []
+            for _ in range(self.cfg.n_ants):
+                tour = self._construct_tour(start_city=0)
+                L = tour_length(tour, self.d)
+                tours.append(tour)
+                lengths.append(L)
+
+            it_best_idx = int(np.argmin(lengths))
+            it_best_len = lengths[it_best_idx]
+            it_best_tour = tours[it_best_idx]
+
+            if it_best_len + 1e-12 < self.best_length:
+                self.best_length = it_best_len
+                self.best_tour = it_best_tour
+                no_improve = 0
+            else:
+                no_improve += 1
+
+            self._evaporate()
+            self._deposit(tours, lengths)
+
+            if self.cfg.restart_on_stagnation and no_improve >= self.cfg.stagnation_patience:
+                L_nn = nearest_neighbor_length(self.d, start=0)
+                tau0 = self.cfg.n_ants / L_nn
+                self.tau.fill(tau0)
+                np.fill_diagonal(self.tau, 0.0)
+                delta_best = self.cfg.q / max(self.best_length, 1e-12)
+                for i in range(self.n):
+                    a = self.best_tour[i]
+                    b = self.best_tour[(i + 1) % self.n]
+                    self.tau[a, b] += delta_best
+                    self.tau[b, a] += delta_best
+                no_improve = 0
+
+        return self.best_tour, self.best_length
+
+
+def solve_tsp_aco(coords: List[City], cfg: Optional[ACOConfig] = None):
+    if cfg is None:
+        cfg = ACOConfig()
+    dmat = build_distance_matrix(coords)
+    aco = AntColony(dmat, cfg)
+    return aco.run()
+
+
+if __name__ == "__main__":
+    coords: List[City] = [(0, 0), (1, 5), (5, 2), (6, 6), (8, 3)]
+
+    cfg = ACOConfig(
+        n_ants=10,
+        n_iterations=100,
+        alpha=1.0,
+        beta=5.0,
+        rho=0.5,
+        q=1.0,
+        elitist_weight=2.0,
+        restart_on_stagnation=True,
+        stagnation_patience=25,
+        seed=123,
+    )
+
+    best_tour, best_len = solve_tsp_aco(coords, cfg)
+
+    print("Best tour (indices):", best_tour)
+    print(f"Best length:",best_len)
